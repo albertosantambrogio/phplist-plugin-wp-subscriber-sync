@@ -32,7 +32,7 @@ on the plugin's admin page. A key has:
 | `allowed_lists`  | List IDs this key may write to. Any other list is refused.              |
 | `default_lists`  | Lists used when the request does not name any.                          |
 | `confirm_policy` | `confirmed` (subscriber is confirmed immediately) or `unconfirmed`.     |
-| `allowed_attrs`  | phpList attribute names this key may set. Others are ignored.           |
+| `allowed_attrs`  | phpList attributes this key may set. Others are ignored.                |
 | `rate_limit`     | Max requests per minute (default 60).                                   |
 | `active`         | Disabled keys get `401`.                                                |
 
@@ -89,7 +89,7 @@ The server:
 | `site`       | yes      | Informational, stored in the server log.                                |
 | `email`      | subscribe| Trimmed and lower-cased by the server; invalid → `400`.                 |
 | `lists`      | no       | Subset of `allowed_lists`. Omitted/empty → `default_lists`.             |
-| `attributes` | no       | Name → string value. Names not in `allowed_attrs` are ignored.          |
+| `attributes` | no       | phpList attribute name (case-insensitive) → value. See below.           |
 
 ### `ping`
 
@@ -104,9 +104,11 @@ settings page can offer them in a drop-down:
   "server": "phpList 3.7.0 / WpSubscriberSync 0.1.0",
   "confirm_policy": "confirmed",
   "lists": [ { "id": 12, "name": "Registered users" } ],
-  "attributes": [ "first_name", "last_name" ]
+  "attributes": [ { "name": "First Name", "type": "textline" } ]
 }
 ```
+
+Each list also carries `"default": true|false`.
 
 ### `subscribe`
 
@@ -120,7 +122,18 @@ Server behaviour, in order:
 3. Apply `confirm_policy`. An existing confirmed subscriber is never
    downgraded to unconfirmed.
 4. Set the allowed attributes (empty strings are ignored, never used to wipe
-   existing values).
+   existing values). Supported phpList attribute types:
+
+   | type                           | value sent                          | stored as            |
+   |--------------------------------|-------------------------------------|----------------------|
+   | textline, textarea, hidden     | any string (max 1000 characters)    | the string           |
+   | date                           | `YYYY-MM-DD`                        | the date             |
+   | checkbox                       | `1`, `on`, `yes`, `true`, `sì`, JSON `true` | `on`         |
+   | select, radio                  | the option **label** (e.g. `Medico`)| the option id        |
+
+   Select/radio options are never created: an unknown label is ignored.
+   Attributes that are not allowed, of another type or with an invalid value
+   are listed in `ignored_attributes` and do not make the request fail.
 5. Add the subscriber to the requested lists (already a member → no-op).
 
 Response:
@@ -131,9 +144,18 @@ Response:
   "subscriber_id": 4711,
   "created": true,
   "confirmed": true,
-  "lists": [12]
+  "lists": [12],
+  "lists_added": [12],
+  "ignored_attributes": ["Birthday"]
 }
 ```
+
+`lists_added` contains only the lists the subscriber was not already a member
+of; `ignored_attributes` is present only when something was ignored.
+
+A blacklisted address answers
+`{ "status": "blacklisted", "subscriber_id": 4711 }` (`null` when the address
+is only on the blacklist table).
 
 ## Status codes
 
@@ -145,6 +167,8 @@ Response:
 | 400  | `invalid_request`       | mark job failed, **do not retry**              |
 | 401  | `unauthorized`          | mark job failed, do not retry, alert the admin |
 | 403  | `list_not_allowed`      | mark job failed, do not retry                  |
+| 403  | `https_required`        | do not retry, alert the admin                  |
+| 409  | `request_id_reused`     | client bug: mark job failed, do not retry      |
 | 405  | `method_not_allowed`    | do not retry                                   |
 | 429  | `rate_limited`          | retry, honouring `Retry-After`                 |
 | 5xx  | `server_error`          | retry with back-off                            |
@@ -160,8 +184,13 @@ Error bodies always look like:
 
 The client reuses the same `request_id` (and the same body) when it retries a
 job. The server stores `(key_id, request_id, body hash, response)` for 24 hours:
-a retry returns the stored response, so a timeout after a successful write
-never produces a duplicate or a double log entry.
+a retry returns the stored response with `"replayed": true`, so a timeout after
+a successful write never produces a duplicate. The same `request_id` with a
+different body gets `409`. 5xx responses are not stored, so a retry after a
+server error runs again.
+
+The rate limit counts every authenticated request of the key in the last 60
+seconds, including the ones refused with `429`.
 
 Client back-off: 1 min, 5 min, 30 min, 2 h, 12 h, then give up and mark the
 job failed.

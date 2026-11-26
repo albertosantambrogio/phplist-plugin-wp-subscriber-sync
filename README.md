@@ -32,7 +32,46 @@ plugins/WpSubscriberSync/
 ```
 
 Then enable the plugin in *Config → Manage plugins* and create a key for each
-WordPress site in *Subscribers → WordPress sync keys*.
+WordPress site in *Subscribers → WordPress sync keys* (super users only).
+The page shows the endpoint URL, the key ID and — once — the secret to paste
+into the WordPress plugin.
+
+For each key you choose:
+
+- the lists the site may write to, and the default ones;
+- whether new subscribers are **confirmed immediately** (the site collected
+  consent) or left unconfirmed;
+- the attributes the site may set (text, textarea, hidden, date, select,
+  radio, checkbox);
+- a rate limit per minute.
+
+The last 100 requests are listed on the same page; retention of the log is set
+in *Config → Settings → WP Subscriber Sync*.
+
+### Optional constants (`config/config.php`)
+
+| constant                        | effect                                                        |
+|---------------------------------|---------------------------------------------------------------|
+| `WPSS_ALLOW_HTTP`               | accept plain HTTP. **Local development only.**                |
+| `WPSS_TRUST_FORWARDED_PROTO`    | trust `X-Forwarded-Proto: https` (behind a TLS-terminating proxy) |
+
+## Testing
+
+`tools/wpss-client.php` signs and sends requests like the WordPress plugin
+does. Credentials come from the environment, so the secret does not end up in
+the shell history:
+
+```sh
+export WPSS_URL='https://example.org/lists/?pi=WpSubscriberSync&p=endpoint'
+export WPSS_KEY=wpss_xxxxxxxxxxxx
+read -s WPSS_SECRET && export WPSS_SECRET
+php tools/wpss-client.php ping
+php tools/wpss-client.php subscribe someone@example.org --attr="First Name=Mario"
+```
+
+**Note for macOS checkouts:** the file system is case-insensitive, so never add
+a file whose name differs from an existing one only by case (`endpoint.php` is
+the public page; classes live in `WpssEndpoint.php` / `WpssDb.php`).
 
 ## License
 
